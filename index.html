@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Mario Maze (Snake Edition)</title>
+    <style>
+        body {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #1a1a1a;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* Import the pixel font */
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start2P&display=swap');
+
+        h1 {
+            color: #e6e6e6;
+            text-shadow: 2px 2px #000;
+            margin-bottom: 20px;
+        }
+
+        #gameCanvas {
+            border: 4px solid #444;
+            background-color: #000;
+            /* IMPORTANT for pixel perfect scaling */
+            image-rendering: crisp-edges;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: pixelated;
+            /* ADJUSTED SCALING: Default to 2x size for better viewing experience */
+            width: 480px; /* 240 (canvas width) * 2 */
+            height: 240px; /* 120 (canvas height) * 2 */
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.4); /* Subtle glow for retro feel */
+        }
+
+        #game-info {
+            margin-top: 15px;
+            font-size: 1.2em;
+            color: #e6e6e6;
+            text-align: center;
+        }
+
+        #restartButton {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            background-color: #c00;
+            color: white;
+            border: 3px solid #800;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 3px 3px #800;
+            transition: background-color 0.2s, box-shadow 0.2s;
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        #restartButton:hover {
+            background-color: #e00;
+            box-shadow: 3px 3px #a00;
+        }
+
+        #restartButton:active {
+            background-color: #a00;
+            box-shadow: 1px 1px #600;
+            transform: translateY(2px);
+        }
+
+        #gameOverOverlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 3em;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            font-family: 'Press Start 2P', cursive; /* Ensure font is used here too */
+        }
+
+        #gameOverOverlay p {
+            margin: 0;
+            text-shadow: 3px 3px #800;
+        }
+
+        #gameOverOverlay button {
+            margin-top: 30px;
+            /* Inherits restartButton styles */
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Mario Maze Runner</h1>
+    <canvas id="gameCanvas" width="240" height="120"></canvas>
+    <div id="game-info">
+        <p id="statusMessage">Use Arrow Keys or WASD to Move!</p>
+    </div>
+    <button id="restartButton">Restart Game</button>
+
+    <div id="gameOverOverlay">
+        <p>GAME OVER</p>
+        <p>Snake Caught You!</p>
+        <button onclick="restartGame()">Restart</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const restartButton = document.getElementById('restartButton');
+        const statusMessage = document.getElementById('statusMessage');
+        const gameOverOverlay = document.getElementById('gameOverOverlay');
+
+        // --- Game Settings ---
+        const TILE_SIZE = 4; // Very small tile size for high detail within a small canvas
+        const MAP_COLS = canvas.width / TILE_SIZE;
+        const MAP_ROWS = canvas.height / TILE_SIZE;
+
+        // Colors to match the image's palette
+        const PLAYER_COLOR_RED = '#DC2F2F'; // Mario's primary red
+        const PLAYER_COLOR_WHITE = '#E3E3E3'; // Mario's white details
+        const PLAYER_COLOR_BROWN = '#732C0D'; // Mario's hair/shoes
+        const PLAYER_COLOR_BLUE = '#006CFF'; // Mario's overalls
+
+        const SNAKE_COLOR = '#DA2020'; // Snake's red
+        const WALL_COLOR_PRIMARY = '#666666'; // Grey walls
+        const WALL_COLOR_ACCENT = '#F7A707'; // Yellow walls
+        const PATH_COLOR = '#000000';   // Black paths (TEMPORARY DEBUGGING: Change to '#FFFF00' to see if maze draws)
+
+        let player = { x: 0, y: 0, size: TILE_SIZE }; // Initial position for Mario, adjusted later
+        let snake = {
+            body: [], // Array of {x,y} segments
+            length: 10, // Initial length of the snake
+            speed: 0.5, // How fast the snake moves per update (0.5 means half a tile per frame)
+        };
+        let gameRunning = false;
+        let maze = [];
+
+        // --- Maze Generation (Adjusted for the visual style and robustness) ---
+        function generateMaze() {
+            console.log("Starting maze generation...");
+            maze = Array(MAP_ROWS).fill(null).map(() => Array(MAP_COLS).fill(1)); // All walls initially
+            // console.log("Maze initialized as all walls (first few rows):", maze.slice(0,5)); // Only log a slice to avoid huge console output
+
+            // Use a DFS-like iterative random walk for maze carving
+            let currentRow = Math.floor(MAP_ROWS / 4) + Math.floor(Math.random() * (MAP_ROWS / 2));
+            let currentCol = Math.floor(MAP_COLS / 4) + Math.floor(Math.random() * (MAP_COLS / 2));
+
+            // Ensure starting cell for maze carving is valid and within bounds (at least 1 tile away from border)
+            currentRow = Math.max(1, Math.min(MAP_ROWS - 2, currentRow));
+            currentCol = Math.max(1, Math.min(MAP_COLS - 2, currentCol));
+            maze[currentRow][currentCol] = 0; // Starting point is path
+
+            let stack = [{ r: currentRow, c: currentCol }];
+
+            const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]]; // Right, Left, Down, Up
+
+            while (stack.length > 0) {
+                let current = stack[stack.length - 1]; // Peek at the top of the stack
+                let r = current.r;
+                let c = current.c;
+
+                let unvisitedNeighbors = [];
+                for (const [dr, dc] of directions) {
+                    const newRow = r + dr * 2; // Jump by 2 to create thicker walls
+                    const newCol = c + dc * 2;
+                    // Check boundaries and if it's an unvisited wall
+                    if (newRow > 0 && newRow < MAP_ROWS - 1 && newCol > 0 && newCol < MAP_COLS - 1 && maze[newRow][newCol] === 1) {
+                        unvisitedNeighbors.push({ r: newRow, c: newCol, viaR: r + dr, viaC: c + dc });
+                    }
+                }
+
+                if (unvisitedNeighbors.length > 0) {
+                    // Pick a random unvisited neighbor
+                    const nextMove = unvisitedNeighbors[Math.floor(Math.random() * unvisitedNeighbors.length)];
+                    maze[nextMove.viaR][nextMove.viaC] = 0; // Carve path between current and next
+                    maze[nextMove.r][nextMove.c] = 0;      // Carve the next cell
+                    stack.push({ r: nextMove.r, c: nextMove.c }); // Add to stack
+                } else {
+                    stack.pop(); // Backtrack if no unvisited neighbors
+                }
+            }
+
+            // After maze generation, ensure player and snake initial positions are clear
+            // This is crucial for rendering them on a path and allowing movement.
+            if (player.y >=0 && player.y < MAP_ROWS && player.x >=0 && player.x < MAP_COLS) {
+                 maze[player.y][player.x] = 0;
+                 console.log("Cleared player start position in maze:", player.x, player.y);
+            } else {
+                console.error("Player initial position is invalid or out of bounds for maze clearing!", player);
+            }
+
+            if (snake.body && snake.body.length > 0) {
+                for(let i=0; i<snake.body.length; i++) {
+                    const segment = snake.body[i];
+                    if (segment && segment.y >=0 && segment.y < MAP_ROWS && segment.x >=0 && segment.x < MAP_COLS) {
+                        maze[segment.y][segment.x] = 0;
+                    } else {
+                        console.error(`Snake segment ${i} initial position is invalid or out of bounds for maze clearing!`, segment);
+                    }
+                }
+                console.log("Cleared snake body path in maze. First segment:", snake.body[0]);
+            } else {
+                console.warn("Snake body is empty when attempting to clear its path in maze. This is normal if snake init is after this function.");
+            }
+
+
+            // Randomly add some accent walls
+            for (let r = 0; r < MAP_ROWS; r++) {
+                for (let c = 0; c < MAP_COLS; c++) {
+                    // Only change a primary wall (1) to an accent wall (2)
+                    if (maze[r][c] === 1 && Math.random() < 0.20) {
+                        maze[r][c] = 2;
+                    }
+                }
+            }
+            // console.log("Maze generation finished. Final maze structure (first few rows):", maze.slice(0,5)); // Log a slice
+        }
+
+
+        // --- Drawing Functions ---
+        function drawMaze() {
+            // console.log("Drawing maze..."); // Too frequent for console, uncomment for specific debugging
+            for (let r = 0; r < MAP_ROWS; r++) {
+                for (let c = 0; c < MAP_COLS; c++) {
+                    if (maze[r][c] === 1) {
+                        ctx.fillStyle = WALL_COLOR_PRIMARY;
+                    } else if (maze[r][c] === 2) {
+                        ctx.fillStyle = WALL_COLOR_ACCENT;
+                    } else {
+                        ctx.fillStyle = PATH_COLOR;
+                    }
+                    ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
+        function drawPlayer() {
+            // console.log("Drawing player at:", player.x, player.y); // Too frequent
+            // Draw a crude Mario sprite using multiple fillRect calls to mimic pixel art
+            const px = player.x * TILE_SIZE;
+            const py = player.y * TILE_SIZE;
+
+            // Hat (Red)
+            ctx.fillStyle = PLAYER_COLOR_RED;
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE / 2); // Top of hat
+            ctx.fillRect(px + TILE_SIZE / 4, py + TILE_SIZE / 2, TILE_SIZE / 2, TILE_SIZE / 4); // Hat brim
+
+            // Face (White)
+            ctx.fillStyle = PLAYER_COLOR_WHITE;
+            ctx.fillRect(px + TILE_SIZE / 4, py + TILE_SIZE / 2, TILE_SIZE / 2, TILE_SIZE / 2); // Face
+
+            // Hair/Mouth (Brown - simplified)
+            ctx.fillStyle = PLAYER_COLOR_BROWN;
+            ctx.fillRect(px + TILE_SIZE / 4, py + TILE_SIZE * 0.75, TILE_SIZE / 2, TILE_SIZE / 4); // Hair/Mouth area
+
+            // Overalls (Blue) - simplified to fit small tile
+            ctx.fillStyle = PLAYER_COLOR_BLUE;
+            ctx.fillRect(px, py + TILE_SIZE * 0.6, TILE_SIZE, TILE_SIZE * 0.4); // Main body/overalls
+
+            // Legs/Feet - very simple brown blocks at the bottom
+            ctx.fillStyle = PLAYER_COLOR_BROWN;
+            ctx.fillRect(px, py + TILE_SIZE * 0.9, TILE_SIZE / 2, TILE_SIZE * 0.1);
+            ctx.fillRect(px + TILE_SIZE / 2, py + TILE_SIZE * 0.9, TILE_SIZE / 2, TILE_SIZE * 0.1);
+        }
+
+        function drawSnake() {
+            // console.log("Drawing snake. Body length:", snake.body.length); // Too frequent
+            ctx.fillStyle = SNAKE_COLOR;
+            for (let i = 0; i < snake.body.length; i++) {
+                const segment = snake.body[i];
+                if (segment) { // Ensure segment exists and is valid
+                    ctx.fillRect(segment.x * TILE_SIZE, segment.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+            // Draw a small eye on the snake's head
+            if (snake.body.length > 0) {
+                const head = snake.body[0];
+                ctx.fillStyle = '#FFFF00'; // Yellow eye
+                ctx.fillRect(head.x * TILE_SIZE + TILE_SIZE * 0.7, head.y * TILE_SIZE + TILE_SIZE * 0.2, TILE_SIZE * 0.15, TILE_SIZE * 0.15);
+            }
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // --- Game Logic ---
+        let lastSnakeMoveTime = 0;
+        const snakeMoveInterval = 150; // Milliseconds per snake tile move
+
+        function update(currentTime) {
+            if (!gameRunning) return;
+
+            // Update snake movement
+            if (currentTime - lastSnakeMoveTime > snakeMoveInterval) {
+                lastSnakeMoveTime = currentTime;
+
+                if (snake.body.length > 0) { // Ensure snake body exists before trying to move
+                    const head = { x: snake.body[0].x, y: snake.body[0].y };
+
+                    // Snake AI: Move towards player using BFS pathfinding
+                    // Exclude the snake's own body from valid pathfinding cells (except for its current head)
+                    let nextSnakeMove = getShortestPathMove(head, player, maze, snake.body.slice(1));
+
+                    if (nextSnakeMove) {
+                        snake.body.unshift(nextSnakeMove); // Add new head
+                        if (snake.body.length > snake.length) {
+                            snake.body.pop(); // Remove tail if grown
+                        }
+                    } else {
+                        // If no clear path found (e.g., stuck), make a random valid move
+                        const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+                        let shuffledDirections = directions.sort(() => 0.5 - Math.random());
+                        let movedRandomly = false;
+                        for (const [sDx, sDy] of shuffledDirections) {
+                            const nextX = head.x + sDx;
+                            const nextY = head.y + sDy;
+                            if (isValidMove(nextX, nextY) && !isSnakeBody(nextX, nextY, snake.body.slice(1))) { // Avoid self-collision
+                                snake.body.unshift({ x: nextX, y: nextY });
+                                if (snake.body.length > snake.length) {
+                                    snake.body.pop();
+                                }
+                                movedRandomly = true;
+                                break;
+                            }
+                        }
+                        if (!movedRandomly) {
+                            console.warn("Snake is stuck and cannot find a valid random move!");
+                        }
+                    }
+                }
+            }
+
+
+            // Collision detection: Snake head with Mario
+            if (snake.body.length > 0 && snake.body[0].x === player.x && player.y === snake.body[0].y) {
+                gameOver();
+                return;
+            }
+
+            render();
+            requestAnimationFrame(update);
+        }
+
+        function render() {
+            clearCanvas();
+            drawMaze();
+            drawPlayer();
+            drawSnake();
+        }
+
+        function isValidMove(x, y) {
+            // console.log(`Checking isValidMove for (${x},${y}). Map size: ${MAP_COLS}x${MAP_ROWS}`); // Debugging
+            if (x < 0 || x >= MAP_COLS || y < 0 || y >= MAP_ROWS) {
+                // console.log(`Move (${x},${y}) is out of bounds.`);
+                return false;
+            }
+            // 0 is path, 1 is primary wall, 2 is accent wall
+            if (maze[y] && maze[y][x] === 0) { // Ensure maze[y] exists before accessing maze[y][x]
+                // console.log(`Move (${x},${y}) is valid (path).`);
+                return true;
+            } else {
+                // console.log(`Move (${x},${y}) is a wall or invalid maze data.`);
+                return false;
+            }
+        }
+
+        // Helper for snake to not collide with its own body during pathfinding
+        function isSnakeBody(x, y, bodySegments) {
+            for (const segment of bodySegments) {
+                if (segment && segment.x === x && segment.y === y) { // Check if segment exists
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // --- Basic Breadth-First Search (BFS) for Snake Pathfinding ---
+        function getShortestPathMove(start, target, maze, occupiedCells = []) {
+            const queue = [{ x: start.x, y: start.y, path: [] }];
+            const visited = new Set();
+            visited.add(`${start.x},${start.y}`);
+
+            const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+            while (queue.length > 0) {
+                const { x, y, path } = queue.shift();
+
+                if (x === target.x && y === target.y) {
+                    return path[0]; // Return the first step of the shortest path
+                }
+
+                for (const [dx, dy] of directions) {
+                    const nextX = x + dx;
+                    const nextY = y + dy;
+                    const nextCoord = `${nextX},${nextY}`;
+
+                    // Check if move is valid (not a wall, not out of bounds)
+                    // And check if the next move is not into the snake's own body (except for its current head which will move)
+                    if (isValidMove(nextX, nextY) && !visited.has(nextCoord) && !isSnakeBody(nextX, nextY, occupiedCells)) {
+                        visited.add(nextCoord);
+                        queue.push({ x: nextX, y: nextY, path: [...path, { x: nextX, y: nextY }] });
+                    }
+                }
+            }
+            return null; // No path found
+        }
+
+
+        function handleKeyPress(e) {
+            if (!gameRunning) return;
+
+            let newPlayerX = player.x;
+            let newPlayerY = player.y;
+
+            switch (e.key) {
+                case 'ArrowUp':
+                case 'w':
+                    newPlayerY--;
+                    break;
+                case 'ArrowDown':
+                case 's':
+                    newPlayerY++;
+                    break;
+                case 'ArrowLeft':
+                case 'a':
+                    newPlayerX--;
+                    break;
+                case 'ArrowRight':
+                case 'd':
+                    newPlayerX++;
+                    break;
+            }
+
+            if (isValidMove(newPlayerX, newPlayerY)) {
+                player.x = newPlayerX;
+                player.y = newPlayerY;
+                // console.log("Player moved to:", player.x, player.y); // Log successful player moves
+            } else {
+                // console.log("Player tried to move to invalid spot:", newPlayerX, newPlayerY); // Log failed player moves
+            }
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            gameOverOverlay.style.display = 'flex';
+            statusMessage.textContent = "GAME OVER! Press Restart.";
+        }
+
+        function initGame() {
+            console.log("initGame started!");
+            gameRunning = true;
+            statusMessage.textContent = "Use Arrow Keys or WASD to Move!";
+            gameOverOverlay.style.display = 'none';
+
+            // Reset player and snake positions. IMPORTANT: Ensure they are within valid MAP_COLS/ROWS
+            player = { x: Math.floor(MAP_COLS * 0.1), y: Math.floor(MAP_ROWS * 0.1), size: TILE_SIZE }; // Start Mario near top-left
+
+            // Initialize snake body first so generateMaze can clear its path
+            snake.body = [];
+            let startSnakeX, startSnakeY;
+
+            // Attempt to find a valid starting position for the snake away from Mario
+            let attempts = 0;
+            const maxAttempts = 200; // Increased attempts for robust placement
+            const minDistance = 10; // Minimum distance in tiles from Mario
+
+            do {
+                // Try to place snake in a general area away from player (e.g., bottom-right half)
+                // Ensure there's enough space for the snake's length + padding from edges
+                startSnakeX = Math.floor(MAP_COLS * 0.7) + Math.floor(Math.random() * (MAP_COLS * 0.3 - snake.length - 2)); // +2 for padding
+                startSnakeY = Math.floor(MAP_ROWS * 0.7) + Math.floor(Math.random() * (MAP_ROWS * 0.3 - 2)); // +2 for padding
+
+                // Ensure generated coordinates are strictly within valid maze bounds (avoiding outer-most walls)
+                startSnakeX = Math.max(1, Math.min(MAP_COLS - snake.length - 1, startSnakeX));
+                startSnakeY = Math.max(1, Math.min(MAP_ROWS - 2, startSnakeY));
+
+                attempts++;
+                if (attempts > maxAttempts) {
+                    console.warn("Could not find ideal snake start position after many attempts. Placing in a fallback corner.");
+                    // Fallback to a fixed corner if randomization fails to find a distant spot
+                    startSnakeX = MAP_COLS - snake.length - 2;
+                    startSnakeY = MAP_ROWS - 2;
+                    if (startSnakeX < 1) startSnakeX = 1;
+                    if (startSnakeY < 1) startSnakeY = 1;
+                    break;
+                }
+            } while (Math.abs(startSnakeX - player.x) < minDistance || Math.abs(startSnakeY - player.y) < minDistance);
+
+            console.log("Calculated snake start position (head):", startSnakeX, startSnakeY);
+
+            for (let i = 0; i < snake.length; i++) {
+                // Ensure snake segment coordinates are within bounds before pushing
+                const segmentX = Math.max(0, Math.min(MAP_COLS - 1, startSnakeX - i));
+                const segmentY = Math.max(0, Math.min(MAP_ROWS - 1, startSnakeY));
+                snake.body.push({ x: segmentX, y: segmentY });
+            }
+            console.log("Snake body initialized. First segment:", snake.body[0]);
+
+            // Now that player and snake.body are initialized, generate the maze.
+            // generateMaze will mark player and snake positions as paths.
+            generateMaze();
+
+            console.log("Game loop started!");
+            render(); // Initial draw
+            lastSnakeMoveTime = performance.now(); // Reset snake move timer
+            requestAnimationFrame(update); // Start game loop
+        }
+
+        function restartGame() {
+            initGame();
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('keydown', handleKeyPress);
+        restartButton.addEventListener('click', restartGame);
+
+        // --- Start the game for the first time ---
+        initGame();
+    </script>
+</body>
+</html>
